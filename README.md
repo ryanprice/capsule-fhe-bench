@@ -1,5 +1,7 @@
 # Capsule Protocol — FHE Benchmark Suite for NVIDIA DGX Spark (GB10)
 
+<img width="1143" height="1195" alt="image" src="https://github.com/user-attachments/assets/70c834b6-dfac-453b-9c06-c04f93bfbcae" />
+
 ## Purpose
 
 This benchmark suite measures the real-world performance of TFHE (Fully Homomorphic Encryption) operations on the NVIDIA DGX Spark / GB10 hardware. The results directly inform the Capsule Protocol's computation class definitions, pricing model, and hardware requirements.
