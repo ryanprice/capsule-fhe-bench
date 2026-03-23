@@ -2,23 +2,27 @@
 
 ## Context
 
-This is the **Capsule Protocol FHE Benchmark Suite**. We are benchmarking Fully Homomorphic Encryption (TFHE) operations on an NVIDIA DGX Spark (GB10 Grace Blackwell Superchip) to determine the real-world feasibility of running encrypted computations on consumer/prosumer hardware for a self-sovereign data protocol.
+This is the **Capsule Protocol FHE Benchmark Suite**. We benchmark Fully Homomorphic Encryption (TFHE) operations on an NVIDIA DGX Spark (GB10 Grace Blackwell Superchip) to determine the real-world feasibility of running encrypted computations on consumer/prosumer hardware for a self-sovereign data protocol.
 
 The DGX Spark specs:
 - **CPU**: 20-core ARM (10x Cortex-X925 + 10x Cortex-A725)
-- **GPU**: Blackwell GPU, 6144 CUDA cores, CUDA compute capability sm_12x
+- **GPU**: Blackwell GPU, 6144 CUDA cores, CUDA compute capability sm_12.1
 - **Memory**: 128GB unified LPDDR5X (shared CPU+GPU via NVLink C2C, 273 GB/s)
-- **OS**: DGX OS (Ubuntu 24.04 LTS based)
+- **OS**: DGX OS (Ubuntu 24.04 LTS based), Linux 6.17.0
 - **Architecture**: aarch64 (ARM)
+- **CUDA**: Toolkit 13.0, Driver 580.126.09
 
-## Goal
+## Current Status
 
-Run TFHE-rs benchmarks mapped to the Capsule Protocol's computation classes:
-- **Class A (simple queries)**: Must complete in <1 second to be viable for real-time agent queries
-- **Class B (analytical)**: Must complete in <30 seconds to be viable for research/bounty workloads
-- **Class C (complex)**: Informational — establish what's currently out of reach
+**CPU and GPU benchmarks are complete.** Full results are in `results/`. Key findings:
 
-The results will be published as proof that the protocol works on real hardware.
+- **Class A (simple queries):** Viable on GPU (962 ms mean). Simple threshold checks are 50-172 ms. Multi-step queries (sum 20 values, 10-feature scan) exceed 1 second.
+- **Class B (analytical):** Viable on both backends. GPU provides 1.7x mean speedup. Heaviest workload (min/max 50 values) is 12.9s on GPU.
+- **GPU acceleration:** 1.6-2.5x speedup on multi-step operations. CPU is faster for trivial 1-2 operation queries due to GPU kernel launch overhead.
+- **Memory:** 0.26 GB peak RSS. The 128 GB unified memory is not a constraint.
+- **Recommendation:** Hybrid CPU/GPU routing — CPU for simple threshold queries, GPU for analytical workloads.
+
+Full report: `results/BENCHMARK_REPORT.md`
 
 ## Build Instructions
 
@@ -26,89 +30,90 @@ The results will be published as proof that the protocol works on real hardware.
 # First run: detect hardware
 bash scripts/detect_hardware.sh
 
-# Build (IMPORTANT: always use target-cpu=native for ARM optimization)
+# Build both CPU and GPU binaries
+# IMPORTANT: always use target-cpu=native for ARM optimization
 RUSTFLAGS="-C target-cpu=native" cargo build --release
 
-# Quick test (3 iterations per benchmark)
+# Quick test — CPU (3 iterations per benchmark)
 ./target/release/capsule-bench --quick
 
-# Full run (10 iterations)
-./target/release/capsule-bench --iterations 10 --output results/full_bench.json
+# Quick test — GPU (3 iterations per benchmark)
+./target/release/capsule-bench-gpu --quick
+
+# Full run — CPU (10 iterations)
+./target/release/capsule-bench --iterations 10 --output results/full_cpu_bench.json
+
+# Full run — GPU (10 iterations)
+./target/release/capsule-bench-gpu --iterations 10 --output results/full_gpu_bench.json
 ```
 
-## Likely Issues & How to Fix Them
+## Known Issues & Fixes
 
 ### Issue: TFHE-rs version mismatch
-The tfhe crate version in Cargo.toml may need adjustment. Check https://crates.io/crates/tfhe for the latest version. As of March 2026, v1.5.x should be current. If compilation fails on version, try:
+Currently using tfhe 1.5.4. Check https://crates.io/crates/tfhe for updates. If compilation fails:
 ```bash
 cargo search tfhe
 # Then update the version in Cargo.toml
 ```
 
 ### Issue: Rust version too old
-TFHE-rs 1.x requires Rust 1.91.1+. Fix with:
+TFHE-rs 1.x requires Rust 1.91.1+. Currently using Rust 1.94.0 stable. Fix with:
 ```bash
 rustup update stable
-# or
-rustup install nightly && rustup default nightly
 ```
 
 ### Issue: API changes in TFHE-rs
-The TFHE-rs high-level API has been relatively stable since v1.0, but if method signatures have changed:
-- Check docs at https://docs.zama.org/tfhe-rs
-- `FheUint8/16/32/64::encrypt()`, `decrypt()`, and arithmetic ops are core and unlikely to break
-- The `cast_into()` method in bench_class_b.rs converts between bit widths — if it doesn't exist, try `FheUint32::try_from(val)` or explicit casting APIs
-- `if_then_else` for conditional selection might be `select` or `cmux` in different versions
+- **CPU (high-level API):** `FheUint8/16/32/64::encrypt()`, `decrypt()`, arithmetic ops, `.ge()`, `.if_then_else()` are core and stable.
+- **CPU casting:** `cast_into()` requires owned values, not references. Use `.clone().cast_into()` when iterating.
+- **GPU (integer API):** Uses `CudaServerKey`, `CudaUnsignedRadixCiphertext`, `gen_keys_radix_gpu()`. NOT the high-level API.
+- **GPU trivial creation:** `create_trivial_radix` needs turbofish: `server_key.create_trivial_radix::<_, CudaUnsignedRadixCiphertext>(0u64, num_blocks, &streams)`
+- **GPU boolean ops:** Use `boolean_bitand()` for AND on `CudaBooleanBlock` (not `bitand()`, which requires `CudaIntegerRadixCiphertext`).
+- **GPU parameters:** `PARAM_GPU_MULTI_BIT_GROUP_4_MESSAGE_2_CARRY_2_KS_PBS_TUNIFORM_2M128`
 
 ### Issue: Compilation on ARM / aarch64
-TFHE-rs supports ARM but the SIMD optimizations (AVX2/AVX512) obviously don't apply. The library should auto-detect and use NEON SIMD instead. If there are arch-specific feature flags failing:
+TFHE-rs auto-detects and uses NEON SIMD on ARM. If arch-specific features fail:
 ```bash
-# Try without arch-specific features
 RUSTFLAGS="-C target-cpu=native" cargo build --release --no-default-features --features integer
 ```
 
-### Issue: GPU features
-Do NOT enable GPU features until CPU benchmarks are working. The GPU path is a separate step:
-1. First get CPU benchmarks running and collect baseline numbers
-2. Then uncomment the GPU feature in Cargo.toml
-3. The CUDA kernels may need sm_12x support — if TFHE-rs CUDA backend doesn't support it yet, we document that finding
+### Issue: GPU CUDA backend
+The GB10's sm_12.1 (Blackwell) is confirmed compatible with tfhe-cuda-backend v0.13.2. GPU features are enabled by default in Cargo.toml (`features = ["integer", "gpu"]`).
 
 ### Issue: Long compilation time
-First build of TFHE-rs can take 10-20 minutes. This is normal — it's compiling cryptographic primitives with heavy optimization. Subsequent builds are incremental and fast.
+First build takes 10-20 minutes (TFHE-rs cryptographic primitives). Subsequent builds are incremental (~3-5 seconds).
 
 ### Issue: Out of memory during build
 Unlikely with 128GB, but if it happens:
 ```bash
-# Limit parallel compilation
 CARGO_BUILD_JOBS=4 RUSTFLAGS="-C target-cpu=native" cargo build --release
 ```
 
-## After Benchmarks Run
+## Key Benchmark Results
 
-1. Read the JSON output in results/ 
-2. The summary section shows whether Class A and Class B queries are viable
-3. Key numbers we care about:
-   - `key_generation` time (one-time cost at node startup)
-   - `glucose_threshold_check` latency (simplest real capsule query)
-   - `multi_threshold_10_features` latency (realistic Class A workload)
-   - `dot_product_10_elem` latency (Class B analytical)
-   - `minmax_50_values` latency (Class B edge case)
-   - Memory RSS after key gen (tells us if 128GB is overkill or necessary)
-
-4. If Class A queries are sub-second on CPU alone, that's a landmark result — it means any GB10 owner can serve real-time capsule queries without GPU acceleration
-
-5. Share the results JSON — it feeds directly into the protocol spec for hardware recommendations
+| Metric | CPU | GPU |
+|:--|--:|--:|
+| Key generation | 467 ms | 784 ms |
+| Glucose threshold (Class A) | 50 ms | 78 ms |
+| Credit range check (Class A) | 116 ms | 172 ms |
+| Sum 20 values (Class A) | 3,141 ms | 1,495 ms |
+| Weighted score 20 feat (Class B) | 4,935 ms | 2,182 ms |
+| Min/Max 50 values (Class B) | 22,180 ms | 12,852 ms |
+| Rolling sum 12 months (Class B) | 2,373 ms | 935 ms |
+| Memory RSS | 0.14 GB | 0.26 GB |
 
 ## Project Structure
 
 ```
-src/main.rs              — Entry point, runs all benchmarks, produces JSON report
-src/main_gpu.rs          — GPU benchmark stub (enable after CPU works)
-src/reporting.rs         — Timing collection and JSON output formatting
-src/bench_setup.rs       — Key generation, encryption/decryption costs
-src/bench_primitives.rs  — Raw FHE ops at 8/16/32/64 bit widths
-src/bench_class_a.rs     — Simulated Class A capsule queries (glucose, credit, etc.)
-src/bench_class_b.rs     — Simulated Class B analytical queries (dot product, weighted score)
+src/main.rs              — CPU benchmark entry point, runs all tiers, produces JSON report
+src/main_gpu.rs          — GPU benchmark entry point, uses TFHE-rs integer GPU API
+src/reporting.rs         — Timing collection and JSON output formatting (CPU only)
+src/bench_setup.rs       — Key generation, encryption/decryption costs (CPU)
+src/bench_primitives.rs  — Raw FHE ops at 8/16/32/64 bit widths (CPU)
+src/bench_class_a.rs     — Simulated Class A capsule queries (CPU)
+src/bench_class_b.rs     — Simulated Class B analytical queries (CPU)
 scripts/detect_hardware.sh  — Pre-flight hardware check
 scripts/run_full_suite.sh   — Automated full benchmark run
+results/BENCHMARK_REPORT.md — Full benchmark report with analysis
+results/full_cpu_bench.json — CPU results (10 iterations, 31 benchmarks)
+results/full_gpu_bench.json — GPU results (10 iterations, 15 benchmarks)
 ```

@@ -31,8 +31,8 @@ pub fn bench_class_b(
             let mut sum = FheUint32::encrypt_trivial(0u32);
             for (a, b) in vec_a.iter().zip(vec_b.iter()) {
                 // Widen to 32-bit for the product to avoid overflow
-                let a_wide: FheUint32 = a.cast_into();
-                let b_wide: FheUint32 = b.cast_into();
+                let a_wide: FheUint32 = a.clone().cast_into();
+                let b_wide: FheUint32 = b.clone().cast_into();
                 let product = &a_wide * &b_wide;
                 sum = &sum + &product;
             }
@@ -57,7 +57,7 @@ pub fn bench_class_b(
         let timings = run_timed("weighted_score_20_features", iters, || {
             let mut weighted_sum = FheUint32::encrypt_trivial(0u32);
             for (feat, &w) in features.iter().zip(weights.iter()) {
-                let scaled: FheUint32 = feat.cast_into();
+                let scaled: FheUint32 = feat.clone().cast_into();
                 let product = &scaled * (w as u32);
                 weighted_sum = &weighted_sum + &product;
             }

@@ -5,7 +5,7 @@ edition = "2021"
 description = "FHE benchmarks for the Capsule Protocol on NVIDIA GB10 / DGX Spark"
 
 [dependencies]
-tfhe = { version = "1.5", features = ["integer"] }
+tfhe = { version = "1.5", features = ["integer", "gpu"] }
 rand = "0.8"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -15,10 +15,9 @@ chrono = "0.4"
 name = "capsule-bench"
 path = "src/main.rs"
 
-# Uncomment after verifying CUDA works on GB10:
-# [[bin]]
-# name = "capsule-bench-gpu"
-# path = "src/main_gpu.rs"
+[[bin]]
+name = "capsule-bench-gpu"
+path = "src/main_gpu.rs"
 
 [profile.release]
 opt-level = 3
